@@ -5,7 +5,7 @@
 </style></head><body><main><section class="panel"><h1>Private showroom</h1><form id="entry"><label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required autocapitalize="off" spellcheck="false"><button type="submit">Enter showroom</button></form><p id="status" role="status" aria-live="polite"></p><noscript>Enable JavaScript to open the showroom.</noscript></section></main>
 <script>
 (() => {
-  const settings = {"salt":"8QrSfffolLOiKcfbbUz6mg","iv":"DjFqpl7cefYcZsW2","wrapped":"VX_ju-U0mg7XWPCAtHgpBXPAck9OsfgmF02pf0LLNXw3xyewfRroYgKOz0Xrwt0Z","file":"./review-a4fcb6c4f52693d4.bin"};
+  const settings = {"salt":"8QrSfffolLOiKcfbbUz6mg","iv":"DjFqpl7cefYcZsW2","wrapped":"VX_ju-U0mg7XWPCAtHgpBXPAck9OsfgmF02pf0LLNXw3xyewfRroYgKOz0Xrwt0Z","file":"./review-9945c1de604f74af.bin","bootstrap":13198167,"total":38708509};
   const form = document.querySelector('#entry');
   const input = document.querySelector('#pass');
   const status = document.querySelector('#status');
@@ -41,14 +41,40 @@
       const mediaKey = await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['decrypt']);
       new Uint8Array(raw).fill(0);
       status.textContent = 'Opening showroom…';
-      const res = await fetch(settings.file,{credentials:'omit',referrerPolicy:'no-referrer'});
-      if (!res.ok) throw Error('load');
-      const file = new Uint8Array(await res.arrayBuffer());
+      const archive = new URL(settings.file, location.href).href;
+      let fullCopy;
+      async function readRange(start, length, signal) {
+        if (fullCopy) return (await fullCopy).subarray(start, start + length);
+        const response = await fetch(archive, {
+          headers: { Range: 'bytes=' + start + '-' + (start + length - 1) },
+          credentials: 'omit', referrerPolicy: 'no-referrer', signal
+        });
+        if (response.status === 200) {
+          fullCopy = response.arrayBuffer().then(buffer => {
+            if (buffer.byteLength !== settings.total) throw Error('Incomplete media');
+            return new Uint8Array(buffer);
+          }).catch(error => { fullCopy = null; throw error; });
+          return (await fullCopy).subarray(start, start + length);
+        }
+        if (response.status !== 206) throw Error('Media unavailable');
+        const block = new Uint8Array(await response.arrayBuffer());
+        if (block.length !== length) throw Error('Incomplete view');
+        return block;
+      }
+      async function loadView(id, entry, signal) {
+        const [offset, length] = entry;
+        const block = await readRange(settings.bootstrap + offset, length, signal);
+        const clear = await crypto.subtle.decrypt({name:'AES-GCM',iv:block.subarray(0,12),
+          additionalData:utf8.encode('private-showroom/hd/v1/'+id)},mediaKey,block.subarray(12));
+        return new Blob([clear], {type:'image/webp'});
+      }
+      const file = await readRange(0, settings.bootstrap);
+
       const clear = await crypto.subtle.decrypt({name:'AES-GCM',iv:file.subarray(0,12),additionalData:utf8.encode('private-showroom/media/v1')},mediaKey,file.subarray(12));
       const stream = new Blob([clear]).stream().pipeThrough(new DecompressionStream('gzip'));
       const html = await new Response(stream).text();
       input.value = '';
-      document.open();document.write(html);document.close();
+      document.open();window.loadReviewView=loadView;document.write(html);document.close();
     } catch {
       status.textContent = 'The showroom could not load. Please retry in a current browser.';
     } finally { button.disabled = false; }
